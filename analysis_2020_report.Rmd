@@ -1,0 +1,622 @@
+---
+title: "Cyclistic 2020 Data Cleaning and Manipulation"
+author: "Thomas N"
+date: "December 10, 2025"
+output: html_document
+---
+For this case study, the historical data collected by Cyclistic on their users will be used to find trends within the various user types and how they use the 
+bike sharing service to help the marketing department strategize a plan to get non-members to subscribe to an annual membership. 
+This document serves as a record documenting the various steps taken to clean the data, along with the findings.
+
+# Table of Contents
+- [Libraries Used](#libraries-used)
+- [Loading in the Data](#loading-in-the-data)
+- [Data Cleaning](#data-cleaning)
+- [Data Manipulation](#data-manipulation)
+  - [Calculating overall user statistics](#calculating-overall-user-statistics)
+  - [Organizing by user type](#organizing-by-user-type)
+  - [Individual user type ride stats](#individual-user-type-ride-stats)
+- [Data Frames: Summary Data](#data-frames-summary-data)
+- [Exporting to CSV for analysis](#exporting-to-csv-for-analysis)
+- [Visualizing The Data](#visualizing-the-data)
+  - [Libraries used for data visualization](#libraries-used-for-data-visualization)
+  - [Loading in the data](#loading-in-the-data-1)
+  - [Visualizing members vs casual users overall average ride length](#visualizing-members-vs-casual-users-overall-average-ride-length)
+  - [Visualizing weekly ride length average: members vs casual users](#visualizing-weekly-ride-length-average-members-vs-casual-users)
+  - [Visualizing weekly ride count: members vs casual users](#visualizing-weekly-ride-count-members-vs-casual-users)
+  
+  
+- [Findings](#findings)
+  
+
+# Libraries Used
+
+```{r libraries, echo=TRUE,warning=FALSE,results="hide", message=FALSE}
+
+# loading various libraries to use for analysis
+library(tidyverse)
+library(dplyr)
+
+
+```
+
+```{r  echo=FALSE, results="hide", message=FALSE}
+library(knitr)
+```
+
+# Loading in the Data
+
+```{r loading-csv-files, echo=TRUE, results="hide", message=FALSE}
+
+
+# loading in all the csv files
+directory <- "./data_2020"
+q1 <- read_csv(file.path(directory, "Divvy_trips_2020_Q1.csv"))
+april_data <- read_csv(file.path(directory, "202004-divvy-tripdata.csv"))
+may_data <- april_data <- read_csv(file.path(directory, "202005-divvy-tripdata.csv"))
+june_data <- read_csv(file.path(directory, "202006-divvy-tripdata.csv"))
+july_data <- read_csv(file.path(directory, "202007-divvy-tripdata.csv"))
+aug_data <- read_csv(file.path(directory, "202008-divvy-tripdata.csv"))
+sept_data <- read_csv(file.path(directory, "202009-divvy-tripdata.csv"))
+oct_data <- read_csv(file.path(directory, "202010-divvy-tripdata.csv"))
+nov_data <- read_csv(file.path(directory, "202011-divvy-tripdata.csv"))
+dec_data <- read_csv(file.path(directory, "202012-divvy-tripdata.csv"))
+```
+
+# Data Cleaning
+
+After loading the CSV files, the consistency of the data was inspected by checking to see if all the column names were consistent across all the CSV files, 
+along with checking if they contained the same number of columns and types of data within them. The CSV files were combined in groups of 3 to 
+represent the 4 quarters of the year. After doing so, all 4 sets representing each quarter were combined into one data frame to represent the 
+entire year for further data cleaning and manipulation.
+
+
+```{r checking-data-consistency, echo=TRUE}
+
+
+q2 <- rbind(april_data, may_data, june_data)
+q3 <- rbind(july_data, aug_data, sept_data)
+q4 <- rbind(oct_data, nov_data, dec_data)
+
+print("-----q1 columns------")
+print(colnames(q1))
+
+
+print("-----q2 columns------")
+print(colnames(q2))
+print("-----q3 columns------")
+print(colnames(q3))
+print("-----q4 columns------")
+print(colnames(q4))
+yearly_df <- rbind(
+  q1, q2, q3, q4
+)
+View(head(yearly_df, 500))
+```
+
+
+The Data was further cleaned by checking for any missing data, such as missing or incorrect values that would be crucial for analysis 
+(e.g. start and end time, user type). Along with that, the start and end time checked as well to see if they were swapped/entered incorrectly. 
+This was done by comparing the start and end times, and if the date of the end time took place before the date of the start time, they would be corrected 
+by swapping them around.
+
+
+```{r data-cleaning, echo=TRUE}
+print("------------missing values------")
+na_counts <- colSums(is.na(yearly_df))
+print(na_counts)
+print("------------------------------")
+
+print(unique(yearly_df$member_casual)) #checking if there are any incorrect values
+
+# checking if dates are swapped
+wrong_dates <- yearly_df %>%
+  filter(as.POSIXct(ended_at) < as.POSIXct(started_at))
+sprintf("num dates swapped: %f", nrow(wrong_dates)) %>% print()
+
+# cleaning data, in case info added in and dates are swapped
+temp <- yearly_df %>%
+  mutate(
+    started_at_temp = if_else(as.POSIXct(ended_at) < as.POSIXct(started_at), ended_at, started_at),
+    ended_at_temp = if_else(as.POSIXct(ended_at) < as.POSIXct(started_at), started_at, ended_at),
+  )
+
+
+yearly_df$started_at <- temp$started_at_temp
+yearly_df$ended_at <- temp$ended_at_temp
+```
+
+
+# Data Manipulation
+
+## Calculating overall user statistics
+
+To calculate the overall user statistics, such as average ride length, max ride length of all user types and the most popular day of the week all 
+user types use the service, various functions were used to perform the calculations. For example, to calculate how long each trip went for, the `difftime` 
+function was used to subtract the end time and start time of a trip represented in minutes. Along with that was using the weekdays function to calculate 
+what day the trip took place on, as the date recorded is in the ISO 8601 format, which only specifies the year, month, date and time it took place. 
+To calculate the average ride length and the longest ride length, the mean and max functions were used. The date the trip ended was used to calculate 
+the day the trip took place on assuming users started and ended their usage of the service on the same day.
+
+
+
+```{r calculating-usertype-stats, echo=TRUE}
+
+yearly_df$ride_length_minutes <- difftime(
+  yearly_df$ended_at,
+  yearly_df$started_at,
+  units = "mins"
+) %>% round(digits = 2)
+yearly_df$day_of_week <- weekdays(yearly_df$ended_at)
+
+yearly_average_ride_length_min <- mean(yearly_df$ride_length_minutes) %>% round(digits = 2)
+yearly_max_ride_length_min <- max(yearly_df$ride_length_minutes) %>% round(digits = 2)
+yearly_day_of_week_ride_count_df <- table(yearly_df$day_of_week) %>% as.data.frame()
+colnames(yearly_day_of_week_ride_count_df) <- c("day_of_week", "count")
+yearly_day_of_week_ride_count_df$day_of_week <- as.character(yearly_day_of_week_ride_count_df$day_of_week)
+View(yearly_day_of_week_ride_count_df)
+day_of_week_index <- which.max(yearly_day_of_week_ride_count_df$count)
+
+#---------------YEARLY STATS------------------
+yearly_day_of_week_mode <- yearly_day_of_week_ride_count_df[day_of_week_index, ]
+yearly_day_of_week_mode_name <- yearly_day_of_week_mode[1, 1]
+sprintf("average ride length (min): %f", yearly_average_ride_length_min) %>% print()
+sprintf("max ride length (min): %f", yearly_max_ride_length_min) %>% print()
+sprintf("mode day of the week: %s", yearly_day_of_week_mode[1, 1]) %>% print()
+
+```
+
+
+
+## Organizing by user type
+
+To find trends amongst the different user types, the yearly data frame was split into two: one for casual users and 
+the other for members. By doing so, when it came to analyzing the data, it allowed me to see any trends between the 
+two different user types on how they each use the bike-sharing service.
+
+```{r data-manipulation-usertype-dataframes, echo=TRUE}
+#---------------------MEMBERS VS CASUAL STATS----------------
+
+casuals_df <- yearly_df[yearly_df$member_casual == "casual", ]
+members_df <- yearly_df[yearly_df$member_casual == "member", ]
+View(head(casuals_df, 20))
+View(head(members_df, 20))
+
+```
+
+After splitting the yearly data frame of all user types into two, each user type's overall yearly average ride length was 
+calculated to see how they differ from each other. That data was later combined with the previously calculated stats, 
+such as the average ride length, longest trip taken, and the most popular day of the week the service was used by all user types, 
+into a single data frame that would later be exported to a CSV file for further analysis. 
+
+```{r data-manipulation-yearly-stats-dataframe, echo=TRUE}
+casuals_average_trip_length_min <- mean(casuals_df$ride_length_minutes) %>% round(digits = 2)
+members_average_trip_length_min <- mean(members_df$ride_length_minutes) %>% round(digits = 2)
+sprintf("casuals average ride length (min) : %f", casuals_average_trip_length_min) %>% print()
+sprintf("members average ride length (min) : %f", members_average_trip_length_min) %>% print()
+```
+
+## Individual user type ride stats
+
+For the two different user types (member, casual), their individual ride stats were calculated based on their usage/activity 
+throughout a week. Such as the average ride length/the number of trips taken using the bike-sharing service, 
+grouped by the day of the week.
+
+### Casual users' average ride length and ride count throughout the week
+
+The code chunk below filters through the data frame containing all data for casual users’ activity using the 
+bike sharing service and calculates their average ride length and number of trips taken, grouped by the day of the week.
+
+```{r data-manipulation-casual-weekly-average-stats, echo=TRUE}
+week_day_column <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+#--------casuals ride stats-----------
+casuals_monday_ride_average <- casuals_df %>%
+  filter(day_of_week == "Monday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+casuals_tuesday_ride_average <- casuals_df %>%
+  filter(day_of_week == "Tuesday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+
+casuals_wednesday_ride_average <- casuals_df %>%
+  filter(day_of_week == "Wednesday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+
+casuals_thursday_ride_average <- casuals_df %>%
+  filter(day_of_week == "Thursday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+
+casuals_friday_ride_average <- casuals_df %>%
+  filter(day_of_week == "Friday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+
+casuals_saturday_ride_average <- casuals_df %>%
+  filter(day_of_week == "Saturday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+
+casuals_sunday_ride_average <- casuals_df %>%
+  filter(day_of_week == "Sunday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+casuals_weekly_ride_average <- c(
+  casuals_monday_ride_average,
+  casuals_tuesday_ride_average,
+  casuals_wednesday_ride_average,
+  casuals_thursday_ride_average,
+  casuals_friday_ride_average,
+  casuals_saturday_ride_average,
+  casuals_sunday_ride_average
+)
+
+
+casuals_monday_ride_count <- casuals_df %>%
+  filter(day_of_week == "Monday") %>%
+  nrow()
+casuals_tuesday_ride_count <- casuals_df %>%
+  filter(day_of_week == "Tuesday") %>%
+  nrow()
+casuals_wednesday_ride_count <- casuals_df %>%
+  filter(day_of_week == "Wednesday") %>%
+  nrow()
+casuals_thursday_ride_count <- casuals_df %>%
+  filter(day_of_week == "Thursday") %>%
+  nrow()
+casuals_friday_ride_count <- casuals_df %>%
+  filter(day_of_week == "Friday") %>%
+  nrow()
+casuals_saturday_ride_count <- casuals_df %>%
+  filter(day_of_week == "Saturday") %>%
+  nrow()
+casuals_sunday_ride_count <- casuals_df %>%
+  filter(day_of_week == "Sunday") %>%
+  nrow()
+
+casuals_weekly_ride_count <- c(
+  casuals_monday_ride_count,
+  casuals_tuesday_ride_count,
+  casuals_wednesday_ride_count,
+  casuals_thursday_ride_count,
+  casuals_friday_ride_count,
+  casuals_saturday_ride_count,
+  casuals_sunday_ride_count
+)
+```
+
+### Members' average ride length and ride count throughout the week
+
+The code chunk below filters through the data frame containing all the data for the member user type’s activity using the bike 
+sharing service and calculates their average ride length and number of trips taken, grouped by the day of the week.
+
+```{r data-manipulation-member-weekly-average-stats, echo=TRUE}
+#------memebers ride stats--------
+
+members_monday_ride_average <- members_df %>%
+  filter(day_of_week == "Monday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+members_tuesday_ride_average <- members_df %>%
+  filter(day_of_week == "Tuesday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+members_wednesday_ride_average <- members_df %>%
+  filter(day_of_week == "Wednesday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+members_thursday_ride_average <- members_df %>%
+  filter(day_of_week == "Thursday") %>%
+  select(ride_length_minutes) %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+members_friday_ride_average <- members_df %>%
+  filter(day_of_week == "Friday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+members_saturday_ride_average <- members_df %>%
+  filter(day_of_week == "Saturday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+members_sunday_ride_average <- members_df %>%
+  filter(day_of_week == "Sunday") %>%
+  pull(ride_length_minutes) %>%
+  mean() %>%
+  round(digits = 2)
+
+members_weekly_ride_average <- c(
+  members_monday_ride_average,
+  members_tuesday_ride_average,
+  members_wednesday_ride_average,
+  members_thursday_ride_average,
+  members_friday_ride_average,
+  members_saturday_ride_average,
+  members_sunday_ride_average
+)
+
+members_monday_ride_count <- members_df %>%
+  filter(day_of_week == "Monday") %>%
+  nrow()
+members_tuesday_ride_count <- members_df %>%
+  filter(day_of_week == "Tuesday") %>%
+  nrow()
+members_wednesday_ride_count <- members_df %>%
+  filter(day_of_week == "Wednesday") %>%
+  nrow()
+members_thursday_ride_count <- members_df %>%
+  filter(day_of_week == "Thursday") %>%
+  nrow()
+members_friday_ride_count <- members_df %>%
+  filter(day_of_week == "Friday") %>%
+  nrow()
+members_saturday_ride_count <- members_df %>%
+  filter(day_of_week == "Saturday") %>%
+  nrow()
+members_sunday_ride_count <- members_df %>%
+  filter(day_of_week == "Sunday") %>%
+  nrow()
+
+members_weekly_ride_count <- c(
+  members_monday_ride_count,
+  members_tuesday_ride_count,
+  members_wednesday_ride_count,
+  members_thursday_ride_count,
+  members_friday_ride_count,
+  members_saturday_ride_count,
+  members_sunday_ride_count
+)
+```
+
+# Data Frames: Summary Data
+
+Two data frames were created to house a summary of all the data calculated from cleaning and manipulating the yearly data set. 
+One of them houses data for the yearly average ride length, longest ride length, and most popular day of the week the service is 
+used from all user types combined, along with casual users’ and members’ average ride length throughout the year. 
+The other one contained data on how casual users and members used the bike-sharing service throughout a week; 
+average ride length and number of rides taken per day of the week.
+
+```{r viewing-summary-data-frames, echo=TRUE}
+#-----------------DATA SUMMARIZED DATA FRAMES-----------------
+all_usertypes_stats_summary_df <- data.frame(
+  all_usertypes_average_ride_length_min = yearly_average_ride_length_min,
+  all_usertypes_max_ride_length_min = yearly_max_ride_length_min,
+  casuals_average_trip_length_min,
+  members_average_trip_length_min,
+  mode_day_of_week = yearly_day_of_week_mode_name
+)
+
+casuals_members_weekly_ride_stats_df <- data.frame(
+  week_day_column,
+  casuals_weekly_ride_average,
+  members_weekly_ride_average,
+  casuals_weekly_ride_count,
+  members_weekly_ride_count
+)
+View(all_usertypes_stats_summary_df)
+View(casuals_members_weekly_ride_stats_df)
+```
+
+```{r echo=FALSE}
+kable(all_usertypes_stats_summary_df, caption = "All User Types Summary Stats")
+kable(casuals_members_weekly_ride_stats_df, caption = "Casual Users vs Members Weekly Ride Stats")
+```
+
+
+# Exporting to CSV for analysis
+
+The two summary data frames along with the data frame tallying the number of rides taken per day of the week for the entire year 
+were than exported as CSV files for further analysis and data visualization with the following code below.
+
+```{r exporting-csv, eval=FALSE}
+source("./analysis_2020/analysis_2020.R") # directory made ahead of time
+# export to csv
+write_csv(yearly_day_of_week_ride_count_df, "./summary_results_2020/yearly_day_of_week_ride_count.csv")
+write_csv(all_usertypes_stats_summary_df, "./summary_results_2020/all_usertypes_stats_summary.csv")
+write_csv(casuals_members_weekly_ride_stats_df, "./summary_results_2020/casuals_members_weekly_ride_stats.csv")
+```
+
+<br>
+<br>
+
+# Visualizing The Data
+
+## Libraries used for data visualization
+
+```{r vislualization-libraries, echo=TRUE, warning=FALSE, results="hide", message=FALSE}
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(lubridate)
+```
+
+## Loading in the data
+
+The various CSV files created previously were than loaded in to a separate R script with the 
+following code to create data visuals.
+
+```{r visualization-loading-data, echo=TRUE, warning=FALSE, results="hide", message=FALSE}
+directory <- "./summary_results_2020"
+yearly_stat_summary_csv <- read_csv(file.path(directory, "all_usertypes_stats_summary.csv"))
+casuals_members_weekly_ride_stats_csv <- read_csv(file.path(directory, "casuals_members_weekly_ride_stats.csv"))
+```
+
+## Visualizing members vs casual users overall average ride length
+
+To compare and visualize members and casual users' overall average ride length throughout the year, data from the 
+"all_usertypes_stats_summary.csv" the memebers and casual users' average trip length through the year data was placed 
+into a new data frame: `yearly_trip_length_summary_df`, in two separate rows to be visualized as a bar graph.
+```{r members-vs-casuals-average-ride-length-bar-graph, echo=TRUE}
+yearly_trip_length_summary_df <- data.frame(
+  user_type = c("members", "casuals"),
+  trip_length = c(yearly_stat_summary_csv$members_average_trip_length_min, yearly_stat_summary_csv$casuals_average_trip_length_min)
+)
+
+bar_graph_usertypes_average_ride_length <- ggplot(
+  data = yearly_trip_length_summary_df
+) +
+  geom_col(mapping = aes(
+    x = user_type, y = trip_length, fill = user_type
+  )) +
+  labs(
+    title = "User Types Average Ride Length 2020",
+    x = "User Types",
+    y = "Ride Length (Min)",
+    fill = "User Type"
+  ) +
+  scale_y_continuous(expand = expansion(add = c(0, 5)))
+```
+
+```{r echo=FALSE}
+print(bar_graph_usertypes_average_ride_length)
+```
+
+## Visualizing weekly ride length average: members vs casual users
+
+To visualize the difference between members' and casual users’ average ride length through a week, the data was pulled from 
+their respective columns in the “casuals_members_weekly_ride_stats.csv” and converted to a long format by creating 2 separate 
+data frames for each user type where each row will contain the day of the week, the average ride length on that day and 
+the user type. The two separate data frames created would then be combined to create a stacked area graph that will plot 
+the data by mapping the data to their respective user type.
+
+```{r members-vs-casuals-weekly-ride-length-average-area-graph, echo=TRUE}
+#------------------weekly comparison-----------
+
+day_of_week_col <- factor(casuals_members_weekly_ride_stats_csv$week_day_column,
+  levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+)
+print(day_of_week_col)
+casuals_weekly_ride_average_df <- data.frame(
+  day_of_week = day_of_week_col,
+  ride_length = casuals_members_weekly_ride_stats_csv$casuals_weekly_ride_average,
+  user_type = rep("casual", 7)
+)
+
+members_weekly_ride_average_df <- data.frame(
+  day_of_week = day_of_week_col,
+  ride_length = casuals_members_weekly_ride_stats_csv$members_weekly_ride_average,
+  user_type = rep("member", 7)
+)
+weekly_ride_average_df <- rbind(casuals_weekly_ride_average_df, members_weekly_ride_average_df)
+# weekly_ride_average_df <- weekly_ride_average_df %>% rename(day_of_week = week_day_column)
+View(weekly_ride_average_df)
+
+
+area_graph_average_weekly_ride_length <- ggplot(
+  weekly_ride_average_df,
+  aes(
+    x = day_of_week,
+    y = ride_length,
+    fill = user_type,
+    group = user_type
+  )
+) +
+  scale_y_continuous(
+    breaks = seq(0, round(max(weekly_ride_average_df$ride_length), -1) + 10, by = 10),
+  ) +
+  geom_area(position = "identity", alpha = 0.7) +
+  geom_line(size = 1, stat = "identity", color = "#6b6b6b") +
+  geom_point(size = 2, color = "#6b6b6b", stat = "identity") +
+  coord_fixed(ratio = 0.05) +
+  labs(
+    x = "Day of the Week",
+    y = "Ride Length (Min)",
+    title = "Weekly Ride Length 2020: Members vs Casuals"
+  )
+```
+
+```{r echo=FALSE}
+print(area_graph_average_weekly_ride_length)
+```
+
+## Visualizing weekly ride count: members vs casual users
+
+To compare how the number of trips taken throughout a week differs between casual users and members, data was pulled from 
+the “casuals_members_weekly_ride_stats.csv” file and converted from long format to wide format. As 2 separate columns list 
+the total number of rides taken by each user type, with each row representing a day of the week (Monday to Friday). 
+By converting it to wide format, it allowed me to create a side-by-side bar chart where the total number of rides between 
+both user types can be compared per day of the week. This was achieved by creating two separate data frames, one for each user type, 
+where their ride count would be ordered from Monday to Friday and then joined into a single one to act as a dataset for the 
+side-by-side bar chart to use and visualize the data.
+
+
+```{r members-vs-casuals-weekly-ride-count-bar-graph, echo=TRUE}
+casuals_weekly_ride_count_df <- data.frame(
+  day_of_week = day_of_week_col,
+  ride_count = casuals_members_weekly_ride_stats_csv$casuals_weekly_ride_count,
+  user_type = rep("casual", 7)
+)
+
+members_weekly_ride_count_df <- data.frame(
+  day_of_week = day_of_week_col,
+  ride_count = casuals_members_weekly_ride_stats_csv$members_weekly_ride_count,
+  user_type = rep("member", 7)
+)
+
+
+weekly_ride_count_df <- rbind(casuals_weekly_ride_count_df, members_weekly_ride_count_df)
+bar_graph_user_types_ride_count <- ggplot(data = weekly_ride_count_df) +
+  geom_col(
+    mapping = aes(
+      x = day_of_week, y = ride_count, fill = user_type
+    ),
+    position = "dodge"
+  ) +
+  scale_y_continuous(
+    labels = function(y) y / 1000,
+    breaks = seq(0, max(weekly_ride_count_df$ride_count) + 100000, by = 50000),
+    expand = expansion(add = c(0, 20000))
+  ) +
+  labs(
+    title = "Weekly Ride Count 2020: Members vs Casuals",
+    x = "Day of the Week",
+    y = "Ride Count (Thousands)",
+    fill = "User Type"
+  )
+
+```
+
+```{r echo=FALSE}
+print(bar_graph_user_types_ride_count)
+```
+
+# Findings 
+
+Throughout the year 2020, casual users had an overall higher ride length on average compared to 
+members.  Along with that, the most popular day of the week for both casual users and members 
+to go on long rides throughout the week falls on a tuesday with casual users averaging a time of 
+69.17 minutes, and members 41.19 minutes.
+
+When it comes to the number of trips taken throughout a week, members beat out casual users 
+with a higher number of trips taken throughout the week, with Friday and Wednesday 
+being the most popular days of the week for members to use the service. 
+Casual users, on the other hand, tend to use the bike-sharing service more on weekends, 
+with Saturday being the most popular day for them.
